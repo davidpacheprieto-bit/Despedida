@@ -97,6 +97,10 @@
             <span id="header-team-emoji">🦁</span>
             <span id="header-team-text">TEAM AITOR</span>
           </div>
+          <div class="sync-status-chip" id="sync-status-badge" title="Sincronización Multidispositivo en Tiempo Real">
+            <span class="sync-dot pulsing"></span>
+            <span id="sync-status-text">🔴 Conectando...</span>
+          </div>
           <div class="header-actions">
             <button class="icon-btn" onclick="openResetModal()" title="Reiniciar partida">🔄</button>
             <button class="icon-btn" onclick="switchTeamModal()" title="Cambiar de equipo">⇄</button>
@@ -336,6 +340,8 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <!-- Confetti library -->
   <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+  <!-- Real-Time Multiplayer Sync via MQTT WebSockets -->
+  <script src="https://unpkg.com/mqtt@5.3.4/dist/mqtt.min.js"></script>
   <!-- App Script -->
   <script src="app.js"></script>
 </body>

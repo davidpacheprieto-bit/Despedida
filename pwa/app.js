@@ -1,6 +1,17 @@
 /* =========================================================
    Gymkana León: PWA App Core Engine (JavaScript ES6+)
+   Multi-Device Real-Time Synchronization via MQTT WebSockets
    ========================================================= */
+
+// Shared Room Configuration
+const SYNC_CONFIG = {
+  roomTopic: 'gymkana_leon_2026_party_clash/sync_v2',
+  brokers: [
+    'wss://broker.emqx.io:8084/mqtt',
+    'wss://broker.hivemq.com:8884/mqtt'
+  ],
+  deviceId: 'device_' + Math.random().toString(36).substring(2, 9)
+};
 
 // Initial Default Route Checkpoints in León, Spain
 const INITIAL_CHECKPOINTS = [
@@ -109,7 +120,7 @@ const state = {
   patrolName: 'Los Cazurros',
   aitorScore: 0,
   amaiaScore: 0,
-  checkpoints: [...INITIAL_CHECKPOINTS],
+  checkpoints: JSON.parse(JSON.stringify(INITIAL_CHECKPOINTS)),
   notifications: [],
   userCoords: {
     latitude: 42.5987,
@@ -118,7 +129,8 @@ const state = {
   },
   currentModalCheckpoint: null,
   selectedQuizAnswer: null,
-  capturedPhotoBase64: null
+  capturedPhotoBase64: null,
+  isMqttConnected: false
 };
 
 // Leaflet Map Handles
@@ -127,11 +139,17 @@ let userMarker = null;
 let checkpointMarkers = [];
 let routePolyline = null;
 
+// Multi-Tab local broadcast
+const localBroadcast = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('gymkana_leon_local') : null;
+
+// MQTT Client
+let mqttClient = null;
+
 // =========================================================
-// Storage / Persistence Engine (IndexedDB + localStorage)
+// Storage / Persistence Engine (localStorage + Memory)
 // =========================================================
 
-const STORAGE_KEY = 'GYMKANA_LEON_STATE_V1';
+const STORAGE_KEY = 'GYMKANA_LEON_STATE_V2';
 
 function saveStateToStorage() {
   try {
@@ -146,7 +164,7 @@ function saveStateToStorage() {
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
   } catch (err) {
-    console.error('Error saving state:', err);
+    console.warn('Storage quota exceeded or private mode, state kept in memory:', err);
   }
 }
 
@@ -173,14 +191,255 @@ function loadStateFromStorage() {
 }
 
 // =========================================================
+// Multi-Device Real-Time Sync via MQTT WebSockets
+// =========================================================
+
+function initMultiDeviceSync() {
+  updateSyncStatus(false, '🟡 Conectando...');
+
+  if (typeof mqtt === 'undefined') {
+    console.warn('[Sync] MQTT library not available, fallback to local broadcast');
+    updateSyncStatus(true, '🟢 LOCAL (Sin internet)');
+    return;
+  }
+
+  tryConnectMqtt(0);
+
+  // Listen to same-device tabs
+  if (localBroadcast) {
+    localBroadcast.onmessage = (event) => {
+      handleIncomingSyncMessage(event.data);
+    };
+  }
+}
+
+function tryConnectMqtt(brokerIndex) {
+  if (brokerIndex >= SYNC_CONFIG.brokers.length) {
+    console.warn('[Sync] All MQTT brokers failed, retrying in 5 seconds...');
+    updateSyncStatus(false, '🔴 Reconectando...');
+    setTimeout(() => tryConnectMqtt(0), 5000);
+    return;
+  }
+
+  const brokerUrl = SYNC_CONFIG.brokers[brokerIndex];
+  console.log(`[Sync] Connecting to live multi-device broker: ${brokerUrl}`);
+
+  try {
+    mqttClient = mqtt.connect(brokerUrl, {
+      clientId: `${SYNC_CONFIG.deviceId}_${Date.now()}`,
+      clean: true,
+      connectTimeout: 5000,
+      reconnectPeriod: 4000
+    });
+
+    mqttClient.on('connect', () => {
+      console.log('[Sync] Connected to Realtime Cloud Relay!');
+      state.isMqttConnected = true;
+      updateSyncStatus(true, '🟢 EN VIVO (Multijugador)');
+
+      // Subscribe to shared party topic
+      mqttClient.subscribe(SYNC_CONFIG.roomTopic, (err) => {
+        if (!err) {
+          console.log(`[Sync] Subscribed to topic: ${SYNC_CONFIG.roomTopic}`);
+          // Ask other connected phones for the latest state
+          broadcastSyncMessage({
+            type: 'INIT_SYNC_REQUEST',
+            senderId: SYNC_CONFIG.deviceId
+          });
+        }
+      });
+    });
+
+    mqttClient.on('message', (topic, message) => {
+      try {
+        const payload = JSON.parse(message.toString());
+        if (payload && payload.senderId !== SYNC_CONFIG.deviceId) {
+          handleIncomingSyncMessage(payload);
+        }
+      } catch (e) {
+        console.warn('[Sync] Error parsing message:', e);
+      }
+    });
+
+    mqttClient.on('error', (err) => {
+      console.warn('[Sync] MQTT connection error:', err);
+      mqttClient.end();
+      tryConnectMqtt(brokerIndex + 1);
+    });
+
+    mqttClient.on('close', () => {
+      state.isMqttConnected = false;
+      updateSyncStatus(false, '🟡 Reconectando...');
+    });
+  } catch (err) {
+    console.warn('[Sync] Exception connecting to MQTT broker:', err);
+    tryConnectMqtt(brokerIndex + 1);
+  }
+}
+
+function updateSyncStatus(isLive, labelText) {
+  const badge = document.getElementById('sync-status-badge');
+  const dot = badge ? badge.querySelector('.sync-dot') : null;
+  const text = document.getElementById('sync-status-text');
+
+  if (text) text.innerText = labelText;
+  if (dot) {
+    if (isLive) {
+      dot.className = 'sync-dot pulsing';
+    } else {
+      dot.className = 'sync-dot offline';
+    }
+  }
+}
+
+function broadcastSyncMessage(data) {
+  data.senderId = SYNC_CONFIG.deviceId;
+  data.timestamp = Date.now();
+
+  const payloadStr = JSON.stringify(data);
+
+  if (mqttClient && state.isMqttConnected) {
+    mqttClient.publish(SYNC_CONFIG.roomTopic, payloadStr);
+  }
+
+  if (localBroadcast) {
+    localBroadcast.postMessage(data);
+  }
+}
+
+function handleIncomingSyncMessage(data) {
+  if (!data || !data.type) return;
+
+  console.log('[Sync] Received incoming event:', data.type);
+
+  switch (data.type) {
+    case 'INIT_SYNC_REQUEST':
+      // If we have already completed challenges or points, send our full state to sync the new device
+      if (state.aitorScore > 0 || state.amaiaScore > 0 || state.notifications.length > 0) {
+        broadcastSyncMessage({
+          type: 'FULL_STATE_SYNC',
+          aitorScore: state.aitorScore,
+          amaiaScore: state.amaiaScore,
+          checkpoints: state.checkpoints,
+          notifications: state.notifications
+        });
+      }
+      break;
+
+    case 'FULL_STATE_SYNC':
+      // Apply full sync if it's more complete or newer
+      if (data.aitorScore > state.aitorScore) state.aitorScore = data.aitorScore;
+      if (data.amaiaScore > state.amaiaScore) state.amaiaScore = data.amaiaScore;
+
+      if (data.checkpoints && Array.isArray(data.checkpoints)) {
+        data.checkpoints.forEach(incomingCp => {
+          const localCp = state.checkpoints.find(c => c.id === incomingCp.id);
+          if (localCp && incomingCp.isCompleted) {
+            localCp.isCompleted = true;
+            localCp.completedByTeam = incomingCp.completedByTeam;
+            if (incomingCp.photoProofUri) {
+              localCp.photoProofUri = incomingCp.photoProofUri;
+            }
+          }
+        });
+      }
+
+      if (data.notifications && Array.isArray(data.notifications)) {
+        data.notifications.forEach(incNotif => {
+          if (!state.notifications.some(n => n.id === incNotif.id)) {
+            state.notifications.push(incNotif);
+          }
+        });
+        state.notifications.sort((a, b) => b.id - a.id);
+      }
+
+      saveStateToStorage();
+      refreshAllGameUI();
+      break;
+
+    case 'CHALLENGE_COMPLETED':
+      // Another device completed a challenge!
+      const cp = state.checkpoints.find(c => c.id === data.checkpointId);
+      if (cp) {
+        cp.isCompleted = true;
+        cp.completedByTeam = data.teamSide;
+        if (data.photoProofUri) {
+          cp.photoProofUri = data.photoProofUri;
+        }
+      }
+
+      // Update scores
+      if (data.teamSide === 'AITOR') {
+        state.aitorScore = Math.max(state.aitorScore, (state.aitorScore || 0) + data.pointsReward);
+      } else {
+        state.amaiaScore = Math.max(state.amaiaScore, (state.amaiaScore || 0) + data.pointsReward);
+      }
+
+      // Add to notifications feed
+      if (data.notification) {
+        state.notifications.unshift(data.notification);
+        // Trigger alert banner on this phone!
+        triggerPushBanner(data.notification);
+        // Play alert audio sound
+        playPushChimeAudio();
+      }
+
+      saveStateToStorage();
+      refreshAllGameUI();
+      break;
+
+    case 'RESET_GAME':
+      state.aitorScore = 0;
+      state.amaiaScore = 0;
+      state.checkpoints = JSON.parse(JSON.stringify(INITIAL_CHECKPOINTS));
+      state.notifications = [];
+      saveStateToStorage();
+      refreshAllGameUI();
+      break;
+  }
+}
+
+// =========================================================
+// Audio Alert Synthesizer (Web Audio API)
+// =========================================================
+
+function playPushChimeAudio() {
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+
+    const ctx = new AudioContext();
+    const now = ctx.currentTime;
+
+    // Pleasant two-tone chime (E5 -> B5)
+    const osc1 = ctx.createOscillator();
+    const gain1 = ctx.createGain();
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(659.25, now); // E5
+    osc1.frequency.exponentialRampToValueAtTime(987.77, now + 0.15); // B5
+
+    gain1.gain.setValueAtTime(0.3, now);
+    gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+
+    osc1.connect(gain1);
+    gain1.connect(ctx.destination);
+
+    osc1.start(now);
+    osc1.stop(now + 0.5);
+  } catch (e) {
+    console.log('Audio playback prevented or unsupported:', e);
+  }
+}
+
+// =========================================================
 // Service Worker Registration (PWA Offline Capability)
 // =========================================================
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('sw.js')
-      .then(reg => console.log('[PWA] ServiceWorker registered with scope:', reg.scope))
-      .catch(err => console.log('[PWA] ServiceWorker registration failed:', err));
+      .then(reg => console.log('[PWA] ServiceWorker registered:', reg.scope))
+      .catch(err => console.log('[PWA] ServiceWorker error:', err));
   });
 }
 
@@ -199,6 +458,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Setup Live GPS Geolocation
   initGeolocationTracker();
+
+  // Setup Multi-device Real-Time Sync
+  initMultiDeviceSync();
 });
 
 // =========================================================
@@ -227,15 +489,21 @@ function selectTeam(team) {
 
 function enterGameScreen() {
   showScreen('screen-game');
-  updateScoreboardUI();
-  updateTeamBadgeUI();
-  renderCheckpointsList();
-  renderNotificationsList();
+  refreshAllGameUI();
   
   // Init Leaflet Map if not created
   setTimeout(() => {
     initLeafletMap();
-  }, 100);
+  }, 120);
+}
+
+function refreshAllGameUI() {
+  updateScoreboardUI();
+  updateTeamBadgeUI();
+  renderCheckpointsList();
+  renderNotificationsList();
+  updateMapMarkers();
+  updateActiveTargetCard();
 }
 
 function switchTab(tabName) {
@@ -265,8 +533,10 @@ function switchTab(tabName) {
 // =========================================================
 
 function updateScoreboardUI() {
-  document.getElementById('score-aitor-num').innerHTML = `${state.aitorScore} <small>pts</small>`;
-  document.getElementById('score-amaia-num').innerHTML = `${state.amaiaScore} <small>pts</small>`;
+  const aitorEl = document.getElementById('score-aitor-num');
+  const amaiaEl = document.getElementById('score-amaia-num');
+  if (aitorEl) aitorEl.innerHTML = `${state.aitorScore} <small>pts</small>`;
+  if (amaiaEl) amaiaEl.innerHTML = `${state.amaiaScore} <small>pts</small>`;
 }
 
 function updateTeamBadgeUI() {
@@ -274,22 +544,33 @@ function updateTeamBadgeUI() {
   const teamEmoji = isAitor ? '🦁' : '👑';
   const teamName = isAitor ? 'TEAM AITOR' : 'TEAM AMAIA';
 
-  document.getElementById('header-team-emoji').innerText = teamEmoji;
-  document.getElementById('header-team-text').innerText = teamName;
-  document.getElementById('nav-team-icon').innerText = teamEmoji;
+  const hEmoji = document.getElementById('header-team-emoji');
+  const hText = document.getElementById('header-team-text');
+  const nIcon = document.getElementById('nav-team-icon');
+
+  if (hEmoji) hEmoji.innerText = teamEmoji;
+  if (hText) hText.innerText = teamName;
+  if (nIcon) nIcon.innerText = teamEmoji;
 
   // My Team Screen elements
-  document.getElementById('my-team-banner-badge').innerText = `${teamEmoji} TU ESCUADRÓN`;
-  document.getElementById('my-team-name-title').innerText = teamName;
-  document.getElementById('my-patrol-label').innerText = `Patrulla: ${state.patrolName}`;
+  const bBadge = document.getElementById('my-team-banner-badge');
+  const bTitle = document.getElementById('my-team-name-title');
+  const bPatrol = document.getElementById('my-patrol-label');
+
+  if (bBadge) bBadge.innerText = `${teamEmoji} TU ESCUADRÓN`;
+  if (bTitle) bTitle.innerText = teamName;
+  if (bPatrol) bPatrol.innerText = `Patrulla: ${state.patrolName}`;
 
   // Progress Bar
   const completedCount = state.checkpoints.filter(c => c.isCompleted).length;
   const totalCount = state.checkpoints.length;
   const percentage = totalCount > 0 ? (completedCount / totalCount) * 100 : 0;
 
-  document.getElementById('route-progress-text').innerText = `${completedCount} de ${totalCount} completados`;
-  document.getElementById('route-progress-fill').style.width = `${percentage}%`;
+  const progText = document.getElementById('route-progress-text');
+  const progFill = document.getElementById('route-progress-fill');
+
+  if (progText) progText.innerText = `${completedCount} de ${totalCount} completados`;
+  if (progFill) progFill.style.width = `${percentage}%`;
 }
 
 // =========================================================
@@ -302,7 +583,6 @@ function initLeafletMap() {
     return;
   }
 
-  // Leon center coordinates
   const initialLat = state.userCoords.latitude || 42.5987;
   const initialLng = state.userCoords.longitude || -5.5671;
 
@@ -311,7 +591,6 @@ function initLeafletMap() {
     attributionControl: false
   }).setView([initialLat, initialLng], 16);
 
-  // High quality OpenStreetMap tiles
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19
   }).addTo(mapInstance);
@@ -328,7 +607,8 @@ function initGeolocationTracker() {
         state.userCoords.longitude = position.coords.longitude;
         state.userCoords.isLive = true;
 
-        document.getElementById('hud-gps-text').innerText = 'GPS REAL ACTIVO';
+        const hudText = document.getElementById('hud-gps-text');
+        if (hudText) hudText.innerText = 'GPS REAL ACTIVO';
         
         if (mapInstance) {
           updateUserMapMarker();
@@ -337,7 +617,8 @@ function initGeolocationTracker() {
       },
       (error) => {
         console.warn('Geolocation access issue:', error);
-        document.getElementById('hud-gps-text').innerText = 'GPS SIMULADO (LEÓN)';
+        const hudText = document.getElementById('hud-gps-text');
+        if (hudText) hudText.innerText = 'GPS SIMULADO (LEÓN)';
       },
       {
         enableHighAccuracy: true,
@@ -349,6 +630,7 @@ function initGeolocationTracker() {
 }
 
 function updateUserMapMarker() {
+  if (!mapInstance) return;
   const lat = state.userCoords.latitude;
   const lng = state.userCoords.longitude;
 
@@ -368,7 +650,6 @@ function updateUserMapMarker() {
 function updateMapMarkers() {
   if (!mapInstance) return;
 
-  // Clear existing checkpoint markers
   checkpointMarkers.forEach(m => mapInstance.removeLayer(m));
   checkpointMarkers = [];
 
@@ -400,7 +681,6 @@ function updateMapMarkers() {
     checkpointMarkers.push(marker);
   });
 
-  // Polyline for the route
   if (routePolyline) {
     mapInstance.removeLayer(routePolyline);
   }
@@ -431,10 +711,14 @@ function updateActiveTargetCard() {
   const nextCp = state.checkpoints.find(c => !c.isCompleted) || state.checkpoints[state.checkpoints.length - 1];
   if (!nextCp) return;
 
-  document.getElementById('target-name').innerText = nextCp.landmarkName;
-  document.getElementById('target-challenge').innerText = `${nextCp.icon} ${nextCp.challengeTitle}`;
+  const tName = document.getElementById('target-name');
+  const tChal = document.getElementById('target-challenge');
+  const tDist = document.getElementById('target-dist-badge');
+  const tBtn = document.getElementById('btn-open-target-challenge');
 
-  // Calculate distance in meters
+  if (tName) tName.innerText = nextCp.landmarkName;
+  if (tChal) tChal.innerText = `${nextCp.icon} ${nextCp.challengeTitle}`;
+
   const distMeters = calculateDistance(
     state.userCoords.latitude,
     state.userCoords.longitude,
@@ -442,12 +726,12 @@ function updateActiveTargetCard() {
     nextCp.longitude
   );
 
-  document.getElementById('target-dist-badge').innerText = `A ${Math.round(distMeters)} m`;
-  document.getElementById('btn-open-target-challenge').innerText = `ABRIR RETO (+${nextCp.pointsReward} pts)`;
+  if (tDist) tDist.innerText = `A ${Math.round(distMeters)} m`;
+  if (tBtn) tBtn.innerText = `ABRIR RETO (+${nextCp.pointsReward} pts)`;
 }
 
 function calculateDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371e3; // Earth radius in meters
+  const R = 6371e3;
   const φ1 = lat1 * Math.PI / 180;
   const φ2 = lat2 * Math.PI / 180;
   const Δφ = (lat2 - lat1) * Math.PI / 180;
@@ -466,6 +750,7 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
 
 function renderCheckpointsList() {
   const container = document.getElementById('checkpoints-list-container');
+  if (!container) return;
   container.innerHTML = '';
 
   state.checkpoints.forEach(cp => {
@@ -494,6 +779,7 @@ function renderCheckpointsList() {
 
 function renderNotificationsList() {
   const container = document.getElementById('notifications-list-container');
+  if (!container) return;
   container.innerHTML = '';
 
   if (state.notifications.length === 0) {
@@ -543,13 +829,17 @@ function triggerPushBanner(notification) {
   const bannerMsg = document.getElementById('banner-message');
   const photoBadge = document.getElementById('banner-photo-badge');
 
-  bannerEmoji.innerText = notification.emoji || '🎉';
-  bannerMsg.innerText = notification.message;
+  if (!banner) return;
 
-  if (notification.photoProofUri) {
-    photoBadge.classList.remove('hidden');
-  } else {
-    photoBadge.classList.add('hidden');
+  if (bannerEmoji) bannerEmoji.innerText = notification.emoji || '🎉';
+  if (bannerMsg) bannerMsg.innerText = notification.message;
+
+  if (photoBadge) {
+    if (notification.photoProofUri) {
+      photoBadge.classList.remove('hidden');
+    } else {
+      photoBadge.classList.add('hidden');
+    }
   }
 
   banner.onclick = () => {
@@ -567,7 +857,8 @@ function triggerPushBanner(notification) {
   banner.classList.remove('hidden');
 
   // Trigger unread badge on tab
-  document.getElementById('feed-unread-badge').classList.remove('hidden');
+  const badge = document.getElementById('feed-unread-badge');
+  if (badge) badge.classList.remove('hidden');
 
   // Auto dismiss after 6 seconds
   setTimeout(() => {
@@ -594,12 +885,10 @@ function openChallengeModal(checkpoint) {
   document.getElementById('modal-challenge-desc').innerText = checkpoint.challengeDescription;
   document.getElementById('modal-points-chip').innerText = `+${checkpoint.pointsReward} PUNTOS`;
 
-  // Hide all challenge areas
   document.getElementById('area-photo-challenge').classList.add('hidden');
   document.getElementById('area-quiz-challenge').classList.add('hidden');
   document.getElementById('area-checkin-challenge').classList.add('hidden');
 
-  // Populate by type
   if (checkpoint.type === 'PHOTO') {
     const photoArea = document.getElementById('area-photo-challenge');
     photoArea.classList.remove('hidden');
@@ -627,11 +916,9 @@ function openChallengeModal(checkpoint) {
       optionsContainer.appendChild(btn);
     });
   } else {
-    // Check-in
     document.getElementById('area-checkin-challenge').classList.remove('hidden');
   }
 
-  // Update submit button text if already completed
   const submitBtn = document.getElementById('btn-submit-challenge');
   if (checkpoint.isCompleted) {
     submitBtn.innerText = 'RETO YA SUPERADO ✓';
@@ -654,24 +941,51 @@ function selectQuizAnswer(index, buttonElem) {
   buttonElem.classList.add('selected');
 }
 
-// Trigger Mobile HTML5 Camera
 function triggerNativeCamera() {
   document.getElementById('native-camera-input').click();
 }
 
+// Compress High-Res Phone Camera image using HTML5 Canvas
 function handlePhotoSelected(event) {
   const file = event.target.files[0];
   if (!file) return;
 
   const reader = new FileReader();
   reader.onload = (e) => {
-    const dataUrl = e.target.result;
-    state.capturedPhotoBase64 = dataUrl;
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const maxDim = 800;
+      let width = img.width;
+      let height = img.height;
 
-    const previewContainer = document.getElementById('photo-preview-thumbnail-container');
-    const previewImg = document.getElementById('photo-preview-img');
-    previewImg.src = dataUrl;
-    previewContainer.classList.remove('hidden');
+      if (width > height) {
+        if (width > maxDim) {
+          height = Math.round((height * maxDim) / width);
+          width = maxDim;
+        }
+      } else {
+        if (height > maxDim) {
+          width = Math.round((width * maxDim) / height);
+          height = maxDim;
+        }
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+
+      // Lightweight compressed JPEG data URL (< 70KB)
+      const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.72);
+      state.capturedPhotoBase64 = compressedDataUrl;
+
+      const previewContainer = document.getElementById('photo-preview-thumbnail-container');
+      const previewImg = document.getElementById('photo-preview-img');
+      previewImg.src = compressedDataUrl;
+      previewContainer.classList.remove('hidden');
+    };
+    img.src = e.target.result;
   };
   reader.readAsDataURL(file);
 }
@@ -685,7 +999,6 @@ function submitCurrentChallenge() {
     return;
   }
 
-  // Validation
   if (cp.type === 'QUIZ' && state.selectedQuizAnswer === null) {
     alert('Por favor selecciona una respuesta');
     return;
@@ -698,7 +1011,6 @@ function submitCurrentChallenge() {
     cp.photoProofUri = state.capturedPhotoBase64;
   }
 
-  // Add Points
   const earned = cp.pointsReward;
   if (state.selectedTeam === 'AITOR') {
     state.aitorScore += earned;
@@ -706,7 +1018,6 @@ function submitCurrentChallenge() {
     state.amaiaScore += earned;
   }
 
-  // Create Real Push Notification
   const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const isAitor = state.selectedTeam === 'AITOR';
   const notif = {
@@ -723,20 +1034,26 @@ function submitCurrentChallenge() {
 
   state.notifications.unshift(notif);
 
-  // Save to persistence
+  // Save to local storage
   saveStateToStorage();
 
-  // Close modal and refresh UI
-  closeChallengeModal();
-  updateScoreboardUI();
-  updateTeamBadgeUI();
-  renderCheckpointsList();
-  renderNotificationsList();
-  updateMapMarkers();
-  updateActiveTargetCard();
+  // Broadcast to ALL OTHER PHONES in real time!
+  broadcastSyncMessage({
+    type: 'CHALLENGE_COMPLETED',
+    checkpointId: cp.id,
+    teamSide: state.selectedTeam,
+    patrolName: state.patrolName,
+    pointsReward: earned,
+    photoProofUri: cp.photoProofUri,
+    notification: notif
+  });
 
-  // Trigger celebration effects
+  closeChallengeModal();
+  refreshAllGameUI();
+
   triggerPushBanner(notif);
+  playPushChimeAudio();
+
   if (window.confetti) {
     confetti({
       particleCount: 100,
@@ -745,7 +1062,6 @@ function submitCurrentChallenge() {
     });
   }
 
-  // Haptic feedback if supported
   if ('vibrate' in navigator) {
     navigator.vibrate([100, 50, 100]);
   }
@@ -794,6 +1110,11 @@ function confirmResetGame() {
   state.notifications = [];
 
   localStorage.removeItem(STORAGE_KEY);
+  
+  broadcastSyncMessage({
+    type: 'RESET_GAME'
+  });
+
   closeResetModal();
   showScreen('screen-team-selection');
 }
