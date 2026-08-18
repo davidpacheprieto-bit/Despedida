@@ -753,6 +753,18 @@ html, body {
   font-weight: 600;
 }
 
+.rival-done-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--gold-celebration);
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  margin-top: 4px;
+}
+
 .cp-badge {
   font-size: 10px;
   font-weight: 800;

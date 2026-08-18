@@ -1,6 +1,7 @@
 /* =========================================================
    Gymkana León: PWA App Core Engine (JavaScript ES6+)
    Multi-Device Real-Time Synchronization via MQTT WebSockets
+   Independent Per-Team Challenge Tracking (Aitor vs Amaia)
    ========================================================= */
 
 // Shared Room Configuration
@@ -25,9 +26,10 @@ const INITIAL_CHECKPOINTS = [
     latitude: 42.5987,
     longitude: -5.5671,
     pointsReward: 200,
-    isCompleted: false,
-    completedByTeam: null,
-    photoProofUri: null,
+    completedByAitor: false,
+    photoProofAitor: null,
+    completedByAmaia: false,
+    photoProofAmaia: null,
     icon: "⛪"
   },
   {
@@ -43,9 +45,10 @@ const INITIAL_CHECKPOINTS = [
     latitude: 42.5968,
     longitude: -5.5682,
     pointsReward: 150,
-    isCompleted: false,
-    completedByTeam: null,
-    photoProofUri: null,
+    completedByAitor: false,
+    photoProofAitor: null,
+    completedByAmaia: false,
+    photoProofAmaia: null,
     icon: "🍻"
   },
   {
@@ -58,9 +61,10 @@ const INITIAL_CHECKPOINTS = [
     latitude: 42.5982,
     longitude: -5.5714,
     pointsReward: 250,
-    isCompleted: false,
-    completedByTeam: null,
-    photoProofUri: null,
+    completedByAitor: false,
+    photoProofAitor: null,
+    completedByAmaia: false,
+    photoProofAmaia: null,
     icon: "🏰"
   },
   {
@@ -76,9 +80,10 @@ const INITIAL_CHECKPOINTS = [
     latitude: 42.6006,
     longitude: -5.5708,
     pointsReward: 200,
-    isCompleted: false,
-    completedByTeam: null,
-    photoProofUri: null,
+    completedByAitor: false,
+    photoProofAitor: null,
+    completedByAmaia: false,
+    photoProofAmaia: null,
     icon: "👑"
   },
   {
@@ -91,9 +96,10 @@ const INITIAL_CHECKPOINTS = [
     latitude: 42.6015,
     longitude: -5.5680,
     pointsReward: 200,
-    isCompleted: false,
-    completedByTeam: null,
-    photoProofUri: null,
+    completedByAitor: false,
+    photoProofAitor: null,
+    completedByAmaia: false,
+    photoProofAmaia: null,
     icon: "🛡️"
   },
   {
@@ -106,9 +112,10 @@ const INITIAL_CHECKPOINTS = [
     latitude: 42.5975,
     longitude: -5.5695,
     pointsReward: 300,
-    isCompleted: false,
-    completedByTeam: null,
-    photoProofUri: null,
+    completedByAitor: false,
+    photoProofAitor: null,
+    completedByAmaia: false,
+    photoProofAmaia: null,
     icon: "🎉"
   }
 ];
@@ -133,6 +140,33 @@ const state = {
   isMqttConnected: false
 };
 
+// Helpers for Team Checkpoint State
+function isCpCompletedByTeam(cp, team) {
+  if (!cp) return false;
+  return team === 'AITOR' ? !!cp.completedByAitor : !!cp.completedByAmaia;
+}
+
+function getCpPhotoByTeam(cp, team) {
+  if (!cp) return null;
+  return team === 'AITOR' ? cp.photoProofAitor : cp.photoProofAmaia;
+}
+
+function setCpCompletedByTeam(cp, team, photoUri) {
+  if (!cp) return;
+  if (team === 'AITOR') {
+    cp.completedByAitor = true;
+    if (photoUri) cp.photoProofAitor = photoUri;
+  } else {
+    cp.completedByAmaia = true;
+    if (photoUri) cp.photoProofAmaia = photoUri;
+  }
+}
+
+function recalculateScores() {
+  state.aitorScore = state.checkpoints.reduce((sum, c) => sum + (c.completedByAitor ? c.pointsReward : 0), 0);
+  state.amaiaScore = state.checkpoints.reduce((sum, c) => sum + (c.completedByAmaia ? c.pointsReward : 0), 0);
+}
+
 // Leaflet Map Handles
 let mapInstance = null;
 let userMarker = null;
@@ -149,7 +183,7 @@ let mqttClient = null;
 // Storage / Persistence Engine (localStorage + Memory)
 // =========================================================
 
-const STORAGE_KEY = 'GYMKANA_LEON_STATE_V2';
+const STORAGE_KEY = 'GYMKANA_LEON_STATE_V3';
 
 function saveStateToStorage() {
   try {
@@ -170,17 +204,36 @@ function saveStateToStorage() {
 
 function loadStateFromStorage() {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
+    const saved = localStorage.getItem(STORAGE_KEY) || localStorage.getItem('GYMKANA_LEON_STATE_V2');
     if (saved) {
       const parsed = JSON.parse(saved);
       state.isGameStarted = parsed.isGameStarted ?? false;
       state.selectedTeam = parsed.selectedTeam ?? 'AITOR';
       state.patrolName = parsed.patrolName || (state.selectedTeam === 'AITOR' ? 'Los Cazurros' : 'Las Reinas');
-      state.aitorScore = parsed.aitorScore || 0;
-      state.amaiaScore = parsed.amaiaScore || 0;
+
       if (parsed.checkpoints && parsed.checkpoints.length > 0) {
-        state.checkpoints = parsed.checkpoints;
+        state.checkpoints = INITIAL_CHECKPOINTS.map(initCp => {
+          const savedCp = parsed.checkpoints.find(c => c.id === initCp.id);
+          if (!savedCp) return { ...initCp };
+
+          const merged = { ...initCp, ...savedCp };
+
+          // Backward compatibility migration if coming from legacy single isCompleted
+          if (savedCp.isCompleted && savedCp.completedByTeam) {
+            if (savedCp.completedByTeam === 'AITOR') {
+              merged.completedByAitor = true;
+              if (savedCp.photoProofUri && !merged.photoProofAitor) merged.photoProofAitor = savedCp.photoProofUri;
+            } else if (savedCp.completedByTeam === 'AMAIA') {
+              merged.completedByAmaia = true;
+              if (savedCp.photoProofUri && !merged.photoProofAmaia) merged.photoProofAmaia = savedCp.photoProofUri;
+            }
+          }
+          return merged;
+        });
       }
+
+      recalculateScores();
+
       if (parsed.notifications && parsed.notifications.length > 0) {
         state.notifications = parsed.notifications;
       }
@@ -327,22 +380,23 @@ function handleIncomingSyncMessage(data) {
       break;
 
     case 'FULL_STATE_SYNC':
-      // Apply full sync if it's more complete or newer
-      if (data.aitorScore > state.aitorScore) state.aitorScore = data.aitorScore;
-      if (data.amaiaScore > state.amaiaScore) state.amaiaScore = data.amaiaScore;
-
       if (data.checkpoints && Array.isArray(data.checkpoints)) {
         data.checkpoints.forEach(incomingCp => {
           const localCp = state.checkpoints.find(c => c.id === incomingCp.id);
-          if (localCp && incomingCp.isCompleted) {
-            localCp.isCompleted = true;
-            localCp.completedByTeam = incomingCp.completedByTeam;
-            if (incomingCp.photoProofUri) {
-              localCp.photoProofUri = incomingCp.photoProofUri;
+          if (localCp) {
+            if (incomingCp.completedByAitor) {
+              localCp.completedByAitor = true;
+              if (incomingCp.photoProofAitor) localCp.photoProofAitor = incomingCp.photoProofAitor;
+            }
+            if (incomingCp.completedByAmaia) {
+              localCp.completedByAmaia = true;
+              if (incomingCp.photoProofAmaia) localCp.photoProofAmaia = incomingCp.photoProofAmaia;
             }
           }
         });
       }
+
+      recalculateScores();
 
       if (data.notifications && Array.isArray(data.notifications)) {
         data.notifications.forEach(incNotif => {
@@ -357,27 +411,20 @@ function handleIncomingSyncMessage(data) {
       refreshAllGameUI();
       break;
 
-    case 'CHALLENGE_COMPLETED':
-      // Another device completed a challenge!
+    case 'CHALLENGE_COMPLETED': {
+      // Another device completed a challenge for their team!
       const cp = state.checkpoints.find(c => c.id === data.checkpointId);
       if (cp) {
-        cp.isCompleted = true;
-        cp.completedByTeam = data.teamSide;
-        if (data.photoProofUri) {
-          cp.photoProofUri = data.photoProofUri;
-        }
+        setCpCompletedByTeam(cp, data.teamSide, data.photoProofUri);
       }
 
-      // Update scores
-      if (data.teamSide === 'AITOR') {
-        state.aitorScore = Math.max(state.aitorScore, (state.aitorScore || 0) + data.pointsReward);
-      } else {
-        state.amaiaScore = Math.max(state.amaiaScore, (state.amaiaScore || 0) + data.pointsReward);
-      }
+      recalculateScores();
 
       // Add to notifications feed
       if (data.notification) {
-        state.notifications.unshift(data.notification);
+        if (!state.notifications.some(n => n.id === data.notification.id)) {
+          state.notifications.unshift(data.notification);
+        }
         // Trigger alert banner on this phone!
         triggerPushBanner(data.notification);
         // Play alert audio sound
@@ -387,6 +434,7 @@ function handleIncomingSyncMessage(data) {
       saveStateToStorage();
       refreshAllGameUI();
       break;
+    }
 
     case 'RESET_GAME':
       state.aitorScore = 0;
@@ -561,8 +609,8 @@ function updateTeamBadgeUI() {
   if (bTitle) bTitle.innerText = teamName;
   if (bPatrol) bPatrol.innerText = `Patrulla: ${state.patrolName}`;
 
-  // Progress Bar
-  const completedCount = state.checkpoints.filter(c => c.isCompleted).length;
+  // Progress Bar for CURRENT team
+  const completedCount = state.checkpoints.filter(c => isCpCompletedByTeam(c, state.selectedTeam)).length;
   const totalCount = state.checkpoints.length;
   const percentage = totalCount > 0 ? (completedCount / totalCount) * 100 : 0;
 
@@ -654,24 +702,36 @@ function updateMapMarkers() {
   checkpointMarkers = [];
 
   const routePoints = [];
+  const nextTargetIdx = getNextTargetIndex();
 
   state.checkpoints.forEach((cp, index) => {
     routePoints.push([cp.latitude, cp.longitude]);
 
-    const isCompleted = cp.isCompleted;
-    const badgeBg = isCompleted ? '#10B981' : (index === getNextTargetIndex() ? '#7C3AED' : '#334155');
+    const isCompletedByMe = isCpCompletedByTeam(cp, state.selectedTeam);
+    const rivalTeam = state.selectedTeam === 'AITOR' ? 'AMAIA' : 'AITOR';
+    const isCompletedByRival = isCpCompletedByTeam(cp, rivalTeam);
+    const isNextTarget = (index === nextTargetIdx) && !isCompletedByMe;
+
+    const badgeBg = isCompletedByMe ? '#10B981' : (isNextTarget ? (state.selectedTeam === 'AITOR' ? '#7C3AED' : '#E11D48') : '#334155');
     
+    let rivalDotHtml = '';
+    if (isCompletedByRival) {
+      const rivalEmoji = rivalTeam === 'AITOR' ? '🦁' : '👑';
+      rivalDotHtml = `<span title="${rivalTeam} ya completó este reto" style="position:absolute; top:-6px; right:-6px; background:#F59E0B; border:1.5px solid #FFF; border-radius:50%; width:16px; height:16px; font-size:9px; display:flex; align-items:center; justify-content:center; box-shadow:0 2px 4px rgba(0,0,0,0.5);">${rivalEmoji}</span>`;
+    }
+
     const iconHtml = `
-      <div style="background:${badgeBg}; color:#FFF; border:2px solid #FFF; border-radius:50%; width:32px; height:32px; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:14px; box-shadow:0 4px 10px rgba(0,0,0,0.5);">
-        ${isCompleted ? '✓' : cp.icon}
+      <div style="position:relative; background:${badgeBg}; color:#FFF; border:2px solid #FFF; border-radius:50%; width:34px; height:34px; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:14px; box-shadow:0 4px 10px rgba(0,0,0,0.5);">
+        ${isCompletedByMe ? '✓' : cp.icon}
+        ${rivalDotHtml}
       </div>
     `;
 
     const markerIcon = L.divIcon({
       className: 'cp-map-marker',
       html: iconHtml,
-      iconSize: [32, 32],
-      iconAnchor: [16, 16]
+      iconSize: [34, 34],
+      iconAnchor: [17, 17]
     });
 
     const marker = L.marker([cp.latitude, cp.longitude], { icon: markerIcon })
@@ -685,7 +745,7 @@ function updateMapMarkers() {
     mapInstance.removeLayer(routePolyline);
   }
   routePolyline = L.polyline(routePoints, {
-    color: '#7C3AED',
+    color: state.selectedTeam === 'AITOR' ? '#7C3AED' : '#E11D48',
     weight: 3,
     opacity: 0.7,
     dashArray: '6, 6'
@@ -703,17 +763,20 @@ function centerMapOnUser() {
 }
 
 function getNextTargetIndex() {
-  const index = state.checkpoints.findIndex(c => !c.isCompleted);
+  const index = state.checkpoints.findIndex(c => !isCpCompletedByTeam(c, state.selectedTeam));
   return index !== -1 ? index : 0;
 }
 
 function updateActiveTargetCard() {
-  const nextCp = state.checkpoints.find(c => !c.isCompleted) || state.checkpoints[state.checkpoints.length - 1];
+  const nextCp = state.checkpoints.find(c => !isCpCompletedByTeam(c, state.selectedTeam)) || state.checkpoints[state.checkpoints.length - 1];
   if (!nextCp) return;
+
+  const isCompletedByMyTeam = isCpCompletedByTeam(nextCp, state.selectedTeam);
 
   const tName = document.getElementById('target-name');
   const tChal = document.getElementById('target-challenge');
   const tDist = document.getElementById('target-dist-badge');
+  const tStatus = document.getElementById('target-status-badge');
   const tBtn = document.getElementById('btn-open-target-challenge');
 
   if (tName) tName.innerText = nextCp.landmarkName;
@@ -727,7 +790,14 @@ function updateActiveTargetCard() {
   );
 
   if (tDist) tDist.innerText = `A ${Math.round(distMeters)} m`;
-  if (tBtn) tBtn.innerText = `ABRIR RETO (+${nextCp.pointsReward} pts)`;
+  
+  if (tStatus) {
+    tStatus.innerText = isCompletedByMyTeam ? '✓ RUTA SUPERADA' : '🎯 SIGUIENTE OBJETIVO';
+  }
+
+  if (tBtn) {
+    tBtn.innerText = isCompletedByMyTeam ? 'VER RETO SUPERADO ✓' : `ABRIR RETO (+${nextCp.pointsReward} pts)`;
+  }
 }
 
 function calculateDistance(lat1, lon1, lat2, lon2) {
@@ -753,19 +823,32 @@ function renderCheckpointsList() {
   if (!container) return;
   container.innerHTML = '';
 
+  const rivalTeam = state.selectedTeam === 'AITOR' ? 'AMAIA' : 'AITOR';
+  const rivalEmoji = rivalTeam === 'AITOR' ? '🦁' : '👑';
+  const rivalName = rivalTeam === 'AITOR' ? 'Team Aitor' : 'Team Amaia';
+
   state.checkpoints.forEach(cp => {
+    const isCompletedByMe = isCpCompletedByTeam(cp, state.selectedTeam);
+    const isCompletedByRival = isCpCompletedByTeam(cp, rivalTeam);
+
     const card = document.createElement('div');
-    card.className = `checkpoint-card ${cp.isCompleted ? 'completed' : ''}`;
+    card.className = `checkpoint-card ${isCompletedByMe ? 'completed' : ''}`;
     card.onclick = () => openChallengeModal(cp);
 
+    let rivalStatusTag = '';
+    if (isCompletedByRival) {
+      rivalStatusTag = `<span class="rival-done-tag">${rivalEmoji} ${rivalName} ya lo superó</span>`;
+    }
+
     card.innerHTML = `
-      <div class="cp-icon-box">${cp.icon}</div>
+      <div class="cp-icon-box">${isCompletedByMe ? '✓' : cp.icon}</div>
       <div class="cp-info">
         <h4 class="cp-title">${cp.landmarkName}</h4>
         <p class="cp-challenge">${cp.challengeTitle}</p>
+        ${rivalStatusTag}
       </div>
       <div class="cp-badge">
-        ${cp.isCompleted ? '✓ SUPERADO' : `+${cp.pointsReward} pts`}
+        ${isCompletedByMe ? '✓ SUPERADO' : `+${cp.pointsReward} pts`}
       </div>
     `;
 
@@ -871,14 +954,17 @@ function triggerPushBanner(notification) {
 // =========================================================
 
 function openActiveTargetModal() {
-  const target = state.checkpoints.find(c => !c.isCompleted) || state.checkpoints[0];
+  const target = state.checkpoints.find(c => !isCpCompletedByTeam(c, state.selectedTeam)) || state.checkpoints[0];
   openChallengeModal(target);
 }
 
 function openChallengeModal(checkpoint) {
   state.currentModalCheckpoint = checkpoint;
   state.selectedQuizAnswer = null;
-  state.capturedPhotoBase64 = checkpoint.photoProofUri || null;
+
+  const isCompletedByMe = isCpCompletedByTeam(checkpoint, state.selectedTeam);
+  const myPhoto = getCpPhotoByTeam(checkpoint, state.selectedTeam);
+  state.capturedPhotoBase64 = myPhoto || null;
 
   document.getElementById('modal-landmark-title').innerText = checkpoint.landmarkName;
   document.getElementById('modal-challenge-name').innerText = `Reto: ${checkpoint.challengeTitle}`;
@@ -895,8 +981,8 @@ function openChallengeModal(checkpoint) {
 
     const previewContainer = document.getElementById('photo-preview-thumbnail-container');
     const previewImg = document.getElementById('photo-preview-img');
-    if (checkpoint.photoProofUri) {
-      previewImg.src = checkpoint.photoProofUri;
+    if (myPhoto) {
+      previewImg.src = myPhoto;
       previewContainer.classList.remove('hidden');
     } else {
       previewContainer.classList.add('hidden');
@@ -920,8 +1006,8 @@ function openChallengeModal(checkpoint) {
   }
 
   const submitBtn = document.getElementById('btn-submit-challenge');
-  if (checkpoint.isCompleted) {
-    submitBtn.innerText = 'RETO YA SUPERADO ✓';
+  if (isCompletedByMe) {
+    submitBtn.innerText = 'RETO YA SUPERADO POR TU EQUIPO ✓';
     submitBtn.style.opacity = '0.6';
   } else {
     submitBtn.innerText = 'COMPLETAR RETO ✨';
@@ -994,7 +1080,8 @@ function submitCurrentChallenge() {
   const cp = state.currentModalCheckpoint;
   if (!cp) return;
 
-  if (cp.isCompleted) {
+  const isCompletedByMe = isCpCompletedByTeam(cp, state.selectedTeam);
+  if (isCompletedByMe) {
     closeChallengeModal();
     return;
   }
@@ -1004,19 +1091,11 @@ function submitCurrentChallenge() {
     return;
   }
 
-  // Mark Completed
-  cp.isCompleted = true;
-  cp.completedByTeam = state.selectedTeam;
-  if (state.capturedPhotoBase64) {
-    cp.photoProofUri = state.capturedPhotoBase64;
-  }
+  // Mark Completed specifically for THIS team!
+  setCpCompletedByTeam(cp, state.selectedTeam, state.capturedPhotoBase64);
 
   const earned = cp.pointsReward;
-  if (state.selectedTeam === 'AITOR') {
-    state.aitorScore += earned;
-  } else {
-    state.amaiaScore += earned;
-  }
+  recalculateScores();
 
   const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const isAitor = state.selectedTeam === 'AITOR';
@@ -1024,10 +1103,10 @@ function submitCurrentChallenge() {
     id: Date.now(),
     teamSide: state.selectedTeam,
     title: isAitor ? '🦁 ¡Team Aitor sumó puntos!' : '👑 ¡Team Amaia a la cabeza!',
-    message: `Superaron ${cp.landmarkName} (+${earned} pts)${cp.photoProofUri ? ' 📸 [Foto adjunta]' : ''}`,
+    message: `Superaron ${cp.landmarkName} (+${earned} pts)${state.capturedPhotoBase64 ? ' 📸 [Foto adjunta]' : ''}`,
     pointsDelta: earned,
     checkpointName: cp.landmarkName,
-    photoProofUri: cp.photoProofUri,
+    photoProofUri: state.capturedPhotoBase64,
     emoji: isAitor ? '🦁' : '👑',
     time: timeStr
   };
@@ -1044,7 +1123,7 @@ function submitCurrentChallenge() {
     teamSide: state.selectedTeam,
     patrolName: state.patrolName,
     pointsReward: earned,
-    photoProofUri: cp.photoProofUri,
+    photoProofUri: state.capturedPhotoBase64,
     notification: notif
   });
 
@@ -1124,6 +1203,5 @@ function switchTeamModal() {
   state.selectedTeam = newTeam;
   state.patrolName = newTeam === 'AITOR' ? 'Los Cazurros' : 'Las Reinas';
   saveStateToStorage();
-  updateTeamBadgeUI();
-  updateScoreboardUI();
+  refreshAllGameUI();
 }
