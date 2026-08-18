@@ -1,0 +1,6 @@
+{
+  "name": "Despedida León: Aitor & Amaia",
+  "description": "Gymkana interactiva de despedida conjunta por León con mapa GPS, retos secuenciales, marcador en vivo, alertas y ranking final.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

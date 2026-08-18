@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="0"
+                android:startY="0"
+                android:endX="108"
+                android:endY="108"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#4A148C" />
+                <item android:offset="0.5" android:color="#7B1FA2" />
+                <item android:offset="1.0" android:color="#E91E63" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Subtle festive confetti shapes -->
+    <path
+        android:fillColor="#33FFD54F"
+        android:pathData="M18,22 L24,18 L22,26 Z" />
+    <path
+        android:fillColor="#3380D8FF"
+        android:pathData="M88,26 L94,32 L86,34 Z" />
+    <path
+        android:fillColor="#33FF80AB"
+        android:pathData="M24,84 L30,90 L22,92 Z" />
+    <path
+        android:fillColor="#33FFD54F"
+        android:pathData="M84,82 L90,78 L88,86 Z" />
+</vector>

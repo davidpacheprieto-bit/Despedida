@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Gymkana León: Aitor vs Amaia</title>
+
+  <!-- PWA & Mobile Viewport Configuration -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#7C3AED">
+  <meta name="description" content="Gymkana de Despedida en León con GPS en tiempo real y retos con foto.">
+  
+  <!-- Web Manifest -->
+  <link rel="manifest" href="manifest.json">
+
+  <!-- Apple iOS Safari Compatibility Meta Tags -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Gymkana León">
+  <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+
+  <!-- Fonts & Stylesheets -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+  
+  <!-- Leaflet Map CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app-container">
+
+    <!-- Heads-Up Push Notification Banner (Top Alert) -->
+    <div id="heads-up-banner" class="heads-up-banner hidden">
+      <div class="banner-content" id="banner-content">
+        <div class="banner-icon-badge" id="banner-emoji">🦁</div>
+        <div class="banner-text">
+          <div class="banner-header">
+            <span class="banner-tag">NOTIFICACIÓN PUSH</span>
+            <span id="banner-photo-badge" class="badge-photo hidden">📸 FOTO DISPONIBLE</span>
+          </div>
+          <p id="banner-message" class="banner-msg">¡Reto completado!</p>
+          <span class="banner-hint">Toca para ver detalles o foto</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Screen 1: Team Selection Screen (Initial state if not selected) -->
+    <div id="screen-team-selection" class="screen active">
+      <div class="selection-wrapper">
+        <div class="hero-brand">
+          <span class="pill-badge">💍 DESPEDIDA DE SOLTEROS LEÓN 2026</span>
+          <h1 class="brand-title">LEÓN<br><span class="brand-gradient">PARTY CLASH</span></h1>
+          <p class="brand-subtitle">GPS Radar • Retos en el Húmedo • Batalla Cazurra</p>
+        </div>
+
+        <div class="cards-team-container">
+          <!-- Team Aitor Card -->
+          <div class="team-select-card card-aitor" id="btn-select-aitor" onclick="selectTeam('AITOR')">
+            <div class="card-emoji-header">🦁</div>
+            <div class="team-info">
+              <span class="team-sub">EL NOVIO</span>
+              <h2 class="team-name">TEAM AITOR</h2>
+              <p class="team-motto">"Los Cazurros Imbatibles del Barrio Húmedo"</p>
+            </div>
+            <div class="badge-action">UNIRSE AL EQUIPO →</div>
+          </div>
+
+          <!-- Team Amaia Card -->
+          <div class="team-select-card card-amaia" id="btn-select-amaia" onclick="selectTeam('AMAIA')">
+            <div class="card-emoji-header">👑</div>
+            <div class="team-info">
+              <span class="team-sub">LA NOVIA</span>
+              <h2 class="team-name">TEAM AMAIA</h2>
+              <p class="team-motto">"Las Reinas del Tapeo y la Muralla"</p>
+            </div>
+            <div class="badge-action">UNIRSE AL EQUIPO →</div>
+          </div>
+        </div>
+
+        <!-- Custom Patrol Name Input -->
+        <div class="patrol-input-box">
+          <label for="patrol-name-input">Nombre de tu patrulla (opcional):</label>
+          <input type="text" id="patrol-name-input" placeholder="Ej: Los Hermanos del Novio" maxlength="30">
+        </div>
+      </div>
+    </div>
+
+    <!-- Screen 2: Main Active Game Shell -->
+    <div id="screen-game" class="screen">
+      
+      <!-- Top App Bar & Live Scoreboard -->
+      <header class="app-header">
+        <div class="header-top-row">
+          <div class="team-status-chip" id="current-team-chip">
+            <span id="header-team-emoji">🦁</span>
+            <span id="header-team-text">TEAM AITOR</span>
+          </div>
+          <div class="header-actions">
+            <button class="icon-btn" onclick="openResetModal()" title="Reiniciar partida">🔄</button>
+            <button class="icon-btn" onclick="switchTeamModal()" title="Cambiar de equipo">⇄</button>
+          </div>
+        </div>
+
+        <!-- Live Scoreboard Banner -->
+        <div class="scoreboard-banner">
+          <div class="score-team team-aitor-score">
+            <span class="score-label">🦁 TEAM AITOR</span>
+            <span class="score-points" id="score-aitor-num">0 <small>pts</small></span>
+          </div>
+          <div class="score-vs">VS</div>
+          <div class="score-team team-amaia-score">
+            <span class="score-label">👑 TEAM AMAIA</span>
+            <span class="score-points" id="score-amaia-num">0 <small>pts</small></span>
+          </div>
+        </div>
+      </header>
+
+      <!-- Main Tab Content Area -->
+      <main class="tabs-container">
+        
+        <!-- TAB 1: Radar GPS & Interactive León Map -->
+        <section id="tab-radar" class="tab-pane active">
+          <div class="radar-view-wrapper">
+            
+            <!-- HUD floating bar -->
+            <div class="map-hud-bar">
+              <div class="hud-item" id="hud-gps-status">
+                <span class="hud-dot pulsing"></span>
+                <span id="hud-gps-text">GPS REAL ACTIVO</span>
+              </div>
+              <button class="hud-center-btn" onclick="centerMapOnUser()">
+                🎯 Centrar en mí
+              </button>
+            </div>
+
+            <!-- Leaflet Map Container -->
+            <div id="leon-map"></div>
+
+            <!-- Active Target Card Floating at Bottom of Map -->
+            <div class="floating-target-card" id="floating-target-card">
+              <div class="target-badge-row">
+                <span class="badge-status" id="target-status-badge">🎯 SIGUIENTE PUNTO</span>
+                <span class="badge-distance" id="target-dist-badge">Calculando...</span>
+              </div>
+              <h3 class="target-title" id="target-name">1. Catedral de León</h3>
+              <p class="target-challenge-title" id="target-challenge">🔍 Foto de Grupo Medieval</p>
+              <div class="target-actions">
+                <button class="btn-action-primary" id="btn-open-target-challenge" onclick="openActiveTargetModal()">
+                  ABRIR RETO (+200 pts)
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB 2: Mi Equipo & Checklist -->
+        <section id="tab-team" class="tab-pane">
+          <div class="team-screen-content">
+            
+            <!-- Team Hero Banner -->
+            <div class="team-hero-card" id="team-hero-card">
+              <div class="hero-team-badge" id="my-team-banner-badge">🦁 TU ESCUADRÓN</div>
+              <h2 id="my-team-name-title">TEAM AITOR</h2>
+              <p id="my-patrol-label" class="patrol-label">Patrulla: Cazurros de Honor</p>
+              
+              <div class="progress-bar-container">
+                <div class="progress-info">
+                  <span>Progreso de la Ruta</span>
+                  <span id="route-progress-text">0 de 6 completados</span>
+                </div>
+                <div class="progress-track">
+                  <div class="progress-fill" id="route-progress-fill" style="width: 0%;"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Section Title -->
+            <div class="section-header">
+              <h3>Ruta Histórica de Retos en León</h3>
+              <span class="route-count">6 PUNTOS</span>
+            </div>
+
+            <!-- Checkpoints List -->
+            <div class="checkpoints-list" id="checkpoints-list-container">
+              <!-- Dynamically populated from JS -->
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB 3: Canal En Directo (Live Feed) -->
+        <section id="tab-feed" class="tab-pane">
+          <div class="feed-screen-content">
+            <div class="feed-header-card">
+              <div class="feed-badge">⚡ CANAL EN DIRECTO</div>
+              <h2>Alertas y Retos Superados</h2>
+              <p>Notificaciones reales y fotos subidas en vivo al completar las pruebas.</p>
+            </div>
+
+            <div class="notifications-list" id="notifications-list-container">
+              <!-- Dynamically populated from JS -->
+            </div>
+          </div>
+        </section>
+
+      </main>
+
+      <!-- Bottom Navigation Bar (Mobile Native Style) -->
+      <nav class="bottom-nav">
+        <button class="nav-item active" onclick="switchTab('radar')" id="nav-radar">
+          <span class="nav-icon">🧭</span>
+          <span class="nav-label">Radar León</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('team')" id="nav-team">
+          <span class="nav-icon" id="nav-team-icon">🦁</span>
+          <span class="nav-label">Mi Equipo</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('feed')" id="nav-feed">
+          <span class="nav-icon">⚡</span>
+          <span class="nav-label">En Directo</span>
+          <span class="feed-unread-badge hidden" id="feed-unread-badge">!</span>
+        </button>
+      </nav>
+
+    </div>
+
+    <!-- MODAL 1: Challenge Detail Modal (Quiz / Photo / Check-in) -->
+    <div id="modal-challenge" class="modal-overlay hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <span class="pill-category" id="modal-checkpoint-tag">PUNTO DE RUTA</span>
+            <h2 id="modal-landmark-title">Catedral de León</h2>
+            <p id="modal-challenge-name" class="modal-sub">Reto: Foto de Grupo Medieval</p>
+          </div>
+          <button class="btn-close" onclick="closeChallengeModal()">✕</button>
+        </div>
+
+        <div class="modal-body">
+          <div class="points-reward-chip" id="modal-points-chip">+200 PUNTOS</div>
+          <p id="modal-challenge-desc" class="challenge-instruction">
+            Sube una foto épica con todo tu equipo frente a la Pulchra Leonina.
+          </p>
+
+          <!-- Challenge Interactive Content (Dynamic based on challenge type) -->
+          <div id="challenge-action-area">
+            
+            <!-- Type: PHOTO -->
+            <div id="area-photo-challenge" class="challenge-type-area hidden">
+              <div class="photo-upload-box" onclick="triggerNativeCamera()">
+                <div class="photo-upload-icon">📸</div>
+                <p>Haz una foto con la cámara o sube de la galería</p>
+                <input type="file" id="native-camera-input" accept="image/*" capture="environment" style="display:none;" onchange="handlePhotoSelected(event)">
+              </div>
+              <div id="photo-preview-thumbnail-container" class="hidden">
+                <img id="photo-preview-img" src="" alt="Prueba de reto">
+                <button class="btn-retake" onclick="triggerNativeCamera()">🔄 Repetir foto</button>
+              </div>
+            </div>
+
+            <!-- Type: TRIVIA / QUIZ -->
+            <div id="area-quiz-challenge" class="challenge-type-area hidden">
+              <h4 id="quiz-question-text" class="quiz-question">¿Cuántos metros cuadrados de vidrieras tiene la Catedral?</h4>
+              <div class="quiz-options-list" id="quiz-options-container">
+                <!-- Populated dynamically -->
+              </div>
+            </div>
+
+            <!-- Type: CHECK-IN / PROXIMITY -->
+            <div id="area-checkin-challenge" class="challenge-type-area hidden">
+              <div class="checkin-status-card">
+                <div class="checkin-icon">📍</div>
+                <p id="checkin-gps-msg">Comprobando proximidad GPS al monumento...</p>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn-modal-cancel" onclick="closeChallengeModal()">Cancelar</button>
+          <button class="btn-modal-complete" id="btn-submit-challenge" onclick="submitCurrentChallenge()">
+            COMPLETAR RETO ✨
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL 2: Photo Viewer & Gallery Downloader Modal -->
+    <div id="modal-photo-viewer" class="modal-overlay hidden">
+      <div class="modal-card modal-photo-card">
+        <div class="modal-header">
+          <div>
+            <div class="photo-viewer-badges">
+              <span id="viewer-team-badge" class="pill-category">🦁 TEAM AITOR</span>
+              <span class="viewer-tag">FOTO DE PRUEBA</span>
+            </div>
+            <h3 id="viewer-photo-title">Catedral de León</h3>
+            <p id="viewer-photo-subtitle" class="modal-sub">Reto superado con éxito</p>
+          </div>
+          <button class="btn-close" onclick="closePhotoViewer()">✕</button>
+        </div>
+
+        <div class="modal-body photo-viewer-body">
+          <div class="photo-container">
+            <img id="viewer-full-image" src="" alt="Foto subida del reto">
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn-modal-cancel" onclick="closePhotoViewer()">Cerrar</button>
+          <a id="btn-download-photo" class="btn-modal-complete btn-download" download="reto_leon.jpg" href="#">
+            📥 GUARDAR EN GALERÍA
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL 3: Reset Confirmation Modal -->
+    <div id="modal-reset" class="modal-overlay hidden">
+      <div class="modal-card modal-alert-card">
+        <div class="alert-icon">⚠️</div>
+        <h3>¿Reiniciar la Gymkana?</h3>
+        <p>Se borrarán los puntos acumulados, las fotos y el estado de la ruta para empezar de cero.</p>
+        <div class="modal-footer">
+          <button class="btn-modal-cancel" onclick="closeResetModal()">Cancelar</button>
+          <button class="btn-modal-danger" onclick="confirmResetGame()">Sí, Reiniciar</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Confetti library -->
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+  <!-- App Script -->
+  <script src="app.js"></script>
+</body>
+</html>
